@@ -1,0 +1,12 @@
+[Unit]
+Description=Automatic Home Light Activity
+
+[Service]
+User=joe
+ExecStart=/home/linuxbrew/.linuxbrew/bin/rbenv exec ruby /home/joe/bin/home-lights joe --verbose
+StandardOutput=append:/var/log/home-lights.log
+StandardError=inherit
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

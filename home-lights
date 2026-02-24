@@ -1,0 +1,773 @@
+#! /usr/bin/env ruby
+require('json')
+require('time')
+
+class System
+  @@scaling = false
+  @@scale_start_time = nil
+
+  TIME_SCALE = 60.0 * 30
+  SCALE_START_TIME = Time.local(2025, 10, 1, 6, 0, 0)
+  LAUNCH_TIME = Time.now
+
+  def self.flags(scaling = false, scale_time = nil)
+    @@scaling = scaling
+    if @@scaling
+      @@scale_start_time = scale_time || SCALE_START_TIME
+      Log.puts("TIME_SCALE #{System::TIME_SCALE}")
+      Log.puts("scale_start_time #{@@scale_start_time}")
+    end
+  end
+
+  def self.scaling
+    return @@scaling
+  end
+
+  def self.now
+    t = Time.now
+    if !@@scaling
+      return t
+    end
+
+    wall_elapsed = t - LAUNCH_TIME
+    t = Time.at(@@scale_start_time + wall_elapsed * TIME_SCALE) 
+    return t
+  end
+
+  def self.sleep(s)
+    if !@@scaling
+      return Kernel.sleep(s)
+    end
+    return Kernel.sleep(s / TIME_SCALE)
+  end
+
+  def self.exec(s)
+    Log.verbose("(" + s + ")")
+    return `#{s}`
+  end
+end
+
+
+class House
+  OPENHUE = "/home/linuxbrew/.linuxbrew/bin/openhue"
+  ROOMS = ["Bedroom", "Fireplace", "Bathroom", "Kitchen", "Solarium", "Porch", "Dining Room"]
+  LIGHTS = ["Porch 1"]
+
+  def initialize
+    @mutex = Mutex.new
+    @no_lights = false
+  end
+
+  def flags(no_lights = false)
+    @no_lights = no_lights
+    if @no_lights
+      Log.puts("House: no lights")
+    end
+  end
+
+  def check
+    return true if @no_lights
+    res = System.exec("#{OPENHUE} discover")
+    return res.match(/\d+\.\d+\.\d+\.\d+/)
+  end
+
+  def light_arg(lt)
+    if !lt.is_a?(Array)
+      lt = [lt]
+    end
+    return lt.find_all {|l| LIGHTS.include?(l)}.collect {|l| "'#{l}'"}.join(" ")
+  end
+
+  def room_arg(rm)
+    if !rm.is_a?(Array)
+      rm = [rm]
+    end
+    return rm.find_all {|r| ROOMS.include?(r)}.collect {|r| "'#{r}'"}.join(" ")
+  end
+
+  def light(lt, state, brightness = -1)
+    if state != "on" && state != "off"
+      Log.puts("bad state for #{lt}: #{state}")
+      return
+    end
+
+    if brightness >= 0
+      b = " -b %.1f" % brightness
+    else
+      b = ""
+    end
+
+    Log.puts("#{lt} #{state}")
+
+    lts = light_arg(lt)
+    if !lts.empty?
+      @mutex.synchronize do
+        if !@no_lights
+          System.exec("#{OPENHUE} set light #{lts} --#{state}#{b}")
+        end
+      end
+    end
+  end
+
+  def get_light(lt = nil)
+    lt ||= LIGHTS
+    lts = light_arg(lt)
+    state = {}
+    if !lts.empty?
+      if lt.is_a?(Array) && lt.length > 1
+        lts = ""  # use 'get all lights' format
+      end
+
+      res = @mutex.synchronize do
+        if !@no_lights
+          j = System.exec("#{OPENHUE} get light -j #{lts}")
+          JSON.parse(j) rescue nil
+        else
+          nil
+        end
+      end
+
+      if res
+        if !res.is_a?(Array)
+          res = [res]
+        end
+        res.each do |l|
+          state[l["Name"]] = l["HueData"]["on"]["on"]
+        end
+      end
+    end
+    return state
+  end
+
+  def get_room(rm = nil)
+    rm ||= ROOMS
+    rms = room_arg(rm)
+    state = {}
+    if !rms.empty?
+      if rm.is_a?(Array) && rm.length > 1
+        rms = ""  # use 'get all lights' format
+      end
+
+      res = @mutex.synchronize do
+        if !@no_lights
+          j = System.exec("#{OPENHUE} get room -j #{rms}")
+          JSON.parse(j) rescue nil
+        else 
+          nil
+        end
+      end
+
+      if res
+        if !res.is_a?(Array)
+          res = [res]
+        end
+        res.each do |r|
+          state[r["Name"]] = r["GroupedLight"]["HueData"]["on"]["on"]
+        end
+      end
+    end
+    return state
+  end
+
+  def room(rm, state, brightness = -1)
+    if state != "on" && state != "off"
+      Log.puts("bad state for #{rm}: #{state}")
+      return
+    end
+
+    if brightness >= 0
+      b = " -b %.1f" % brightness
+    else
+      b = ""
+    end
+
+    Log.puts("#{rm} #{state}")
+
+    rms = room_arg(rm)
+    if !rms.empty?
+      @mutex.synchronize do
+        if !@no_lights
+          System.exec("#{OPENHUE} set room #{rms} --#{state}#{b}")
+        end
+      end
+    end
+  end
+
+  def flash_rooms
+    3.times do
+      room(ROOMS, "on", 50)
+      sleep(1)
+      room(ROOMS, "off")
+      sleep(1)
+    end
+  end
+
+  def all_rooms_off
+    room(ROOMS, "off")
+  end
+end
+
+
+class Log
+  @@mutex = Mutex.new
+  @@verbose = false
+
+  def self.flags(verbose = false)
+    @@verbose = verbose
+    Log.verbose("Log: verbose on")
+  end
+
+  def self.puts(msg)
+    @@mutex.synchronize do
+      t = System.now
+      ts = "%d-%02d-%02d" % [t.year, t.month, t.day]
+      $stdout.puts("#{ts} #{hms(t.hour, t.min, t.sec)}  #{msg}")
+      $stdout.flush
+    end
+  end
+
+  def self.verbose(msg)
+    if @@verbose
+      Log.puts(msg)
+    end
+  end
+
+  def self.hms(h, m, s = nil)
+    ap = "AM"
+    if h == 0
+      h = 12
+    elsif h >= 12
+      ap = "PM"
+      if h > 12
+        h = h - 12
+      end
+    end
+
+    if s
+      return "%02d:%02d:%02d %s" % [h, m, s, ap]
+    else
+      return "%02d:%02d %s" % [h, m, ap]
+    end
+  end
+end
+
+
+class Porch
+  DEFAULT_SUNSET_HR = 17
+  DEFAULT_SUNSET_MN = 0
+
+  PORCH_OFF_HR = 23
+  PORCH_OFF_MN = 30
+
+  def sleep_until(time)
+    t = System.now
+    if time > t
+      System.sleep(time - t)
+    else
+      Log.puts("bad time: #{time}")
+    end
+  end
+
+  def oclock(today, hour, minute = 0, second = 0)
+    return Time.local(today.year, today.month, today.day, hour, minute, second)
+  end
+
+  def tomorrow(time)
+    t = time + 24 * 60 * 60  # sometime next day
+    return Time.local(t.year, t.month, t.day, time.hour, time.min, time.sec, time.usec)
+  end
+
+  def later(now, time)
+    if time < now
+      return tomorrow(time)
+    else
+      return time
+    end
+  end
+
+  def hrs(x)
+    return x * 60 * 60
+  end
+
+  def fetch_sunset(today)
+    date = today.strftime("%Y-%m-%d")
+
+    if date == @sunset_date && @sunset
+      return @sunset
+    end
+
+    @sunset_date = date
+    @sunset = nil
+
+    #  https://sunrise-sunset.org/api
+    j = System.exec("/usr/bin/curl -s 'https://api.sunrise-sunset.org/json?lat=42.88865&lng=-73.21436&tzid=America/New_York&date=#{date}'")
+    r = JSON.parse(j) rescue nil
+    if r && r["status"] == "OK"
+      s = r["results"]["sunset"].match(/^(\d+):(\d+):(\d+)/)  # "sunset"=>"8:20:46 PM"
+      if s
+        @sunset = Time.local(today.year, today.month, today.day, s[1].to_i + 12, s[2].to_i, s[3].to_i)
+        Log.puts("Sunset today is at #{Log.hms(@sunset.hour, @sunset.min, @sunset.sec)}")
+        return @sunset
+      end
+    end
+
+    Log.puts("bad sunset service: #{j.inspect}")
+    return nil
+  end
+
+  def light_on
+    @house.light("Porch 1", "on")
+  end
+
+  def light_off
+    @house.light("Porch 1", "off")
+  end
+
+  def run(house)
+    Log.puts("Running Porch")
+
+    @house = house
+    Log.verbose("porch light goes off at #{Log.hms(PORCH_OFF_HR, PORCH_OFF_MN)}")
+
+    Thread.new do
+      last_good_sunset = nil
+      while true
+        now = today = System.now
+        sunset = fetch_sunset(now)
+        porch_off = oclock(now, PORCH_OFF_HR, PORCH_OFF_MN)
+
+        # retry fetching sunset if there's time
+        if !sunset
+          if last_good_sunset
+            s = oclock(today, last_good_sunset.hour, last_good_sunset.min, last_good_sunset.sec)
+          else
+            s = oclock(today, DEFAULT_SUNSET_HR, DEFAULT_SUNSET_MN)
+          end
+          if now < (s - hrs(1))
+            Log.verbose("retrying sunset in 30 min")
+            sleep(hrs(0.5))  # try fetching again later
+            next
+          end
+          sunset = s
+        else
+          last_good_sunset = sunset
+        end
+
+        if PORCH_OFF_HR <= 12  #eg, 1am
+          if now >= sunset || now < porch_off
+            light_on
+            Log.verbose("sleeping until porch light off")
+            sleep_until(later(now, porch_off))
+          else
+            light_off
+            Log.verbose("sleeping until sunset")
+            sleep_until(sunset)
+          end
+
+        else  # eg, 11:30pm
+          if now >= sunset && now < porch_off
+            light_on
+            Log.verbose("sleeping until porch light off")
+            sleep_until(porch_off)
+          else
+            light_off
+            if now >= porch_off
+              Log.verbose("sleeping until tomorrow")
+              sleep_until(tomorrow(oclock(today, 4)))
+            else
+              Log.verbose("sleeping until sunset")
+              sleep_until(sunset)
+            end
+          end
+        end
+      end
+
+    end
+  end
+end
+
+
+class Joe
+  # exclude "Porch"
+  ROOMS = ["Bedroom", "Fireplace", "Bathroom", "Kitchen", "Solarium", "Dining Room"]
+
+  def busy_until(time, what)
+    t = System.now
+    dur = time - t
+    if dur >= 0
+      d = "%.1f" % (dur / 3600)
+      Log.puts("#{what} for #{d} hrs")
+      System.sleep(dur)
+    else
+      Log.puts("bad time for busy_until: #{time}, #{what}")
+    end
+  end
+
+  def oclock(hour, minute = 0, second = 0)
+    t = System.now
+    return Time.local(t.year, t.month, t.day, hour, minute, second)
+  end
+
+  def tomorrow(time)
+    t = time + 24 * 60 * 60  # sometime next day
+    return Time.local(t.year, t.month, t.day, time.hour, time.min, time.sec, time.usec)
+  end
+
+  def later(time)
+    if time < System.now
+      return tomorrow(time)
+    else
+      return time
+    end
+  end
+
+  def hrs(x)
+    return x * 60 * 60
+  end
+
+  def mins(x)
+    return x * 60
+  end
+
+  def rand_duration(r)
+    if !r.is_a?(Range)
+      r = (0 .. r)
+    end
+    return rand * (r.max - r.min) + r.min
+  end
+
+  def rand_time(r)
+    if !r.is_a?(Range)
+      Log.puts("bad time range: #{r.inspect}")
+      return r
+    end
+    if !r.min.is_a?(Time)
+      Log.puts("bad time value: #{r.min.inspect}")
+      return r.min
+    end
+
+    return r.min + rand * (r.max - r.min)
+  end
+
+  def move_to(room)
+    if room != @room
+      Log.puts("Moving to #{room}")
+      lights_off
+      @room = room
+    end
+    lights_on
+  end
+
+  ON_DELAY = 30
+
+  def lights_on(room = nil, delay = nil)
+    room ||= @room
+    delay ||= rand * ON_DELAY
+
+    # brightness depending on time and room
+    b = 50  # default not too bright
+    t = System.now
+    case room
+      when "Bedroom"
+        if t < oclock(8) || t > oclock(20)
+          b = 10  # dimmer at night
+        else
+          b = 40
+        end
+
+      when "Fireplace"
+        if t > oclock(21)
+          b = 20  # dimmer at night
+        end
+    end
+
+    if @lights[room] == b
+      return
+    end
+    @lights[room] = b
+
+    ds = "%.1f mins" % (delay/60)
+    Log.verbose("(#{room} light on delay #{ds})")
+    Thread.new do
+      System.sleep(delay)
+      @house.room(room, "on", b)
+    end
+  end
+
+  OFF_DELAY = 60 * 10
+  FORGET_CHANCE = 0.05
+
+  def lights_off(room = nil, force = false, delay = nil)
+    room ||= @room
+
+    if !@lights[room]
+      return
+    end
+
+    h = System.now.hour
+    if !force && (h >= 6 && h <= 22) && rand < FORGET_CHANCE
+      Log.puts("Forgetting to turn off #{room}")
+      return
+    end
+
+    @lights[room] = nil
+
+    delay ||= rand * OFF_DELAY
+    ds = "%.1f mins" % (delay/60)
+    Log.verbose("(#{room} light off delay #{ds})")
+    Thread.new do
+      System.sleep(delay)
+      @house.room(room, "off")
+    end
+  end
+
+  def all_lights_off
+    ROOMS.each do |room|
+      lights_off(room, room == "Bedroom")
+    end
+  end
+
+
+  AWAY_CHANCE = 0.1
+
+  def one_day
+    wake_up
+
+    if rand < AWAY_CHANCE
+      away
+    else
+      breakfast
+      lunch
+      dinner
+    end
+
+    go_to_sleep
+  end
+
+  def noodle_until(time)
+    while true
+      case rand(100)
+        when 0 .. 15
+          move_to("Solarium")
+          a = "Noodling in the Solarium"
+          dur = mins(30) .. hrs(3)
+
+        when 16 .. 30
+          move_to("Kitchen")
+          lights_on("Dining Room")
+          a = "Noodling in the Kitchen"
+          dur = mins(15) .. hrs(3)
+
+        when 31 .. 40
+          move_to("Bathroom")
+          a = "Noodling in the Bathroom"
+          dur = mins(5) .. mins(30)
+
+        when 41 .. 60
+          lights_off
+          a = "Noodling outside"
+          dur = hrs(1) .. hrs(4)
+
+        when 61 .. 75
+          move_to("Fireplace")
+          a = "Noodling in the Fireplace"
+          dur = hrs(1) .. hrs(3)
+
+        else
+          move_to("Bedroom")
+          a = "Noodling in the Bedroom"
+          dur = mins(30) .. hrs(3)
+      end
+
+      t = System.now
+      if time - t < dur.max
+        busy_until(time, a)
+        break
+      else
+        t += rand_duration(dur)
+        busy_until(t, a)
+      end
+    end
+  end
+
+  def start_activity(window, noodle = true)
+    if !window.is_a?(Range)
+      window = (window .. window)
+    end
+
+    t = System.now
+    if t > window.max
+      return nil
+    end
+
+    event_time = rand_time(window)
+    if t > event_time
+      event_time = t
+    end
+
+    if t < event_time && noodle
+      noodle_until(event_time)
+    end
+
+    return event_time
+  end
+
+  def away
+    start = start_activity(oclock(21) .. oclock(23), false)
+    return if !start
+
+    all_lights_off
+    busy_until(start, "Away")
+  end
+
+  def wake_up
+    start = start_activity(oclock(6) .. oclock(10, 30), false)
+    return if !start
+
+    busy_until(start, "Sleeping")
+    lights_on("Bedroom", 0)
+    busy_until(System.now + rand_duration(mins(15) .. mins(45)), "Waking up")
+  end
+
+  def breakfast
+    start = start_activity(oclock(8, 30) .. oclock(11))
+    return if !start
+
+    Log.puts("Breakfast time")
+
+    move_to("Kitchen")
+    lights_on("Solarium")
+    lights_on("Dining Room")
+
+    busy_until(start + rand_duration(mins(15) .. mins(45)), "Having breakfast")
+  end
+
+  def lunch
+    start = start_activity(oclock(13) .. oclock(15))
+    return if !start
+
+    Log.puts("Lunch time")
+
+    move_to("Kitchen")
+    lights_off("Solarium")
+    lights_on("Dining Room")
+
+    busy_until(start + rand_duration(mins(15) .. mins(45)), "Having lunch")
+  end
+
+
+  def dinner
+    start = start_activity(oclock(18) .. oclock(21))
+    return if !start
+
+    Log.puts("Dinner time")
+
+    move_to("Kitchen")
+    lights_off("Solarium")
+    if rand > 0.5
+      lights_on("Dining Room")
+    else
+      lights_on("Fireplace")
+    end
+    
+    busy_until(start + rand_duration(mins(15) .. hrs(1)), "Having dinner")
+  end
+
+  def go_to_sleep
+    start = start_activity(oclock(22) .. tomorrow(oclock(2)))
+    return if !start
+
+    Log.puts("Bedtime")
+
+    move_to("Bedroom")
+    busy_until(start + rand_duration(mins(15) .. mins(20)), "Winding down")
+
+    all_lights_off
+    zzz = later(rand_time(oclock(3) .. oclock(4.5)))
+    busy_until(zzz, "Sleeping")
+    if rand > 0.75
+      lights_on("Bathroom")
+      busy_until(System.now + rand_duration(mins(5) .. mins(10)), "Noodling in Bathroom")
+      lights_off("Bathroom")
+    end
+  end
+
+  def run(house)
+    Log.puts("Running Joe")
+
+    @house = house
+    @room = "Bedroom"
+    @lights = @house.get_room
+    @lights.each_pair {|r, s| @lights[r] = s ? 100 : nil}
+
+    Thread.new do
+      while true
+        Log.puts("--- New day")
+        one_day
+      end
+    end
+  end
+end
+
+class HomeLights
+  def help
+    if ARGV.include?("-h") || ARGV.include?("--help")
+      puts("home-lights [joe] [porch] [--verbose] [--no_lights] [--scaling] [--scale_time <time>]")
+      puts("# automate home lights to look like someone's here")
+      exit(0)
+    end
+  end
+
+  def run
+    help
+
+    m   = File.mtime(__FILE__)
+    ms  = "%d-%02d-%02d" % [m.year, m.month, m.day]
+    ver = ms + " " + Log.hms(m.hour, m.min, m.sec)
+    Log.puts("home-lights started")
+    Log.puts("version #{ver}")
+    Log.puts("ruby #{RUBY_VERSION}")
+
+    Log.flags(ARGV.include?("--verbose"))
+
+    scaling = ARGV.include?("--scaling")
+    scale_time = nil
+    if scaling
+      i = ARGV.index("--scale_time")
+      if i
+        scale_time = Time.parse(ARGV[i+1]) rescue nil
+      end
+    end
+    System.flags(scaling, scale_time)
+
+    house = House.new
+    house.flags(ARGV.include?("--no_lights"))
+
+    while !house.check
+      Log.puts("Looking for hue bridge...")
+      sleep(10)
+    end
+
+    if ARGV.include?("joe")
+      joe = Joe.new
+      joe.run(house)
+    end
+
+    if ARGV.include?("porch")
+      porchlight = Porch.new
+      porchlight.run(house)
+    end
+
+    while true
+      # Log.puts("tick")
+      sleep(60)
+    end
+  end
+end
+
+
+begin
+    HomeLights.new.run
+rescue Interrupt
+    puts
+end
