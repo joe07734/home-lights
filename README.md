@@ -3,7 +3,15 @@ Home light automation using Philips Hue / openhue. This isn't written to be plug
 
 I run it on a linux server as two services, one for full automation and one just for the porch light.
 
-It requires Ruby 3.4+, rbenv, openhue, and curl.
+It requires Ruby 3.0 or newer, rbenv, openhue, and curl.
+
+If you just want to see it run, try
+
+`% home-lights joe --no_lights --scaling --verbose` (openhue and curl not required)
+
+and
+
+`% home-lights porch --no_lights --verbose` (openhue not required, but it needs curl to get the sunset time)
 
 ## Development
 I stop the services and run it from the command line when working on it.
