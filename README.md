@@ -26,7 +26,7 @@ You'll want to modify the sim for your life. Really as a programmer this is wher
 
 I include the option `--no_lights` if I want to run it without openhue. This is best when also used with the following options.
 
-When I'm debugging the sim I often use the options `--scaling` and `--scale_time`. Scaling speeds up the sim and is a multiplier, for example `--scaling 2` runs the sim at twice the wall clock time. I usually use it at 1800, or 1 second of wall clock time is 30 minutes of sim. You can also specify the start time when scaling so that you can also start the sim at a repeatable day and time of day. Ruby's `Time.parse()` is used on the argument to `--scale_time` so lots of formats work, for example `--scale_time '2026-03-11 8:00am'`. It's especially useful for testing, since some elements of the sim are random.
+When I'm debugging the sim I often use the options `--scaling` and `--scale_time`. Scaling speeds up the sim and is a multiplier set with `TIME_SCALE`. I usually use it at `60.0 * 30`, or 1 second of wall clock time is 30 minutes of sim. You can specify the start time when running with scaling so that the sim starts at a repeatable date and time of day. Ruby's `Time.parse()` is used on the argument to `--scale_time` so lots of formats work, for example `--scale_time '2026-03-11 3:00am'`. It's especially useful to have a repeatable time for testing, since many aspects of the sim are random.
 
 But it's also terrific fun during testing to use scaling without the `--no_lights` option. That is, with an entire day simulated with lights throughout the house turning on and off at warp speed. Until my girlfriend says stop it.
 
