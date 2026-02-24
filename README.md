@@ -16,6 +16,8 @@ and
 ## Development
 I stop the services and run it from the command line when working on it.
 
+### The Joe sim
+
 `% home-lights joe`
 
 This runs home lights automation in the foreground with the joe simulation. This is a simulation of me and a typical day, moving around and turning lights on and off. See `class Joe`.
@@ -33,6 +35,8 @@ But it's also terrific fun during testing to use scaling without the `--no_light
 In `class System` you'll see the wrappers I wrote for time routines `now` and `sleep` to support scaling. In this way the scaling is hidden, and the sim code can use `now` and `sleep` as usual, so long as it calls them on the System class.
 
 `class Log` is a simple logger to stdout that automatically timestamps lines and understands the verbose flag.
+
+### The porch light
 
 There's also:
 
